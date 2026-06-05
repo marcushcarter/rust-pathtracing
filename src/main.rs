@@ -18,32 +18,83 @@ use winit::{
     window::{Window, WindowId},
 };
 
+struct GlContext {
+    surface: glutin::surface::Surface<WindowSurface>,
+    context: glutin::context::PossiblyCurrentContext,
+}
+
+impl GlContext {
+    fn swap_buffers(&self) {
+        self.surface.swap_buffers(&self.context).unwrap();
+    }
+
+    fn resize(&self, width: u32, height: u32) {
+        self.surface.resize(
+            &self.context,
+            NonZeroU32::new(width).unwrap(),
+            NonZeroU32::new(height).unwrap(),
+        );
+    }
+}
+
 struct App {
+    title: String,
+    width: u32,
+    height: u32,
     window: Option<Window>,
-    gl_surface: Option<glutin::surface::Surface<WindowSurface>>,
-    gl_context: Option<glutin::context::PossiblyCurrentContext>,
+    gl: Option<GlContext>,
 }
 
 impl App {
-    fn new() -> Self {
-        Self { window: None, gl_surface: None, gl_context: None }
+    fn new(title: &str, width: u32, height: u32) -> Self {
+        Self {
+            title: title.to_string(),
+            width,
+            height,
+            window: None,
+            gl: None,
+        }
+    }
+
+    fn setup(&mut self) {
+        println!("Setup\n");
+    }
+
+    fn shutdown(&mut self) {
+        println!("Shutdown\n");
+    }
+
+    fn update(&mut self) {
+    }
+
+    fn render(&mut self) {
+        unsafe {
+            gl::ClearColor(0.1, 0.1, 0.15, 1.0);
+            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+        }
+    }
+
+    fn on_resize(&mut self, width: u32, height: u32) {
+        if let Some(gl) = &self.gl {
+            gl.resize(width, height);
+            unsafe { gl::Viewport(0, 0, width as GLsizei, height as GLsizei); }
+        }
     }
 }
 
 impl ApplicationHandler for App {
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_attrs = Window::default_attributes()
-            .with_title("Game")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
+            .with_title(&self.title)
+            .with_inner_size(winit::dpi::LogicalSize::new(self.width, self.height));
 
         let template = ConfigTemplateBuilder::new();
         let display_builder = DisplayBuilder::new().with_window_attributes(Some(window_attrs));
 
         let (window, gl_config) = display_builder
-            .build(event_loop, template, |configs| {
-                configs
-                    .reduce(|a, b| if a.num_samples() > b.num_samples() { a } else { b })
-                    .unwrap()
+            .build(event_loop, template, |configs| { 
+                configs.reduce(|a, b| if a.num_samples() > b.num_samples() { a } else { b }).unwrap()
             })
             .unwrap();
 
@@ -77,43 +128,31 @@ impl ApplicationHandler for App {
             gl_display.get_proc_address(&s)
         });
 
+        self.gl = Some(GlContext { surface, context });
         self.window = Some(window);
-        self.gl_surface = Some(surface);
-        self.gl_context = Some(context);
+
+        self.setup();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.shutdown();
+                event_loop.exit();
+            },
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
-                    if let (Some(surface), Some(context)) =
-                        (&self.gl_surface, &self.gl_context)
-                    {
-                        surface.resize(
-                            context,
-                            NonZeroU32::new(size.width).unwrap(),
-                            NonZeroU32::new(size.height).unwrap(),
-                        );
-                        unsafe {
-                            gl::Viewport(0, 0, size.width as GLsizei, size.height as GLsizei);
-                        }
-                    }
+                    self.on_resize(size.width, size.height);
                 }
             }
             WindowEvent::RedrawRequested => {
-                // -------------------------------------------------------
-                // Your render code goes here
-                // -------------------------------------------------------
-                unsafe {
-                    gl::ClearColor(0.1, 0.1, 0.15, 1.0);
-                    gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-                }
-                // -------------------------------------------------------
+                self.update();
+                self.render();
 
-                if let (Some(surface), Some(context)) = (&self.gl_surface, &self.gl_context) {
-                    surface.swap_buffers(context).unwrap();
+                if let Some(gl) = &self.gl {
+                    gl.swap_buffers();
                 }
+
                 self.window.as_ref().unwrap().request_redraw();
             }
             _ => {}
@@ -122,9 +161,8 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    println!("hello");
-
+    println!("Hello, World!");
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new();
+    let mut app = App::new("Game", 1280, 720);
     event_loop.run_app(&mut app).unwrap();
 }
