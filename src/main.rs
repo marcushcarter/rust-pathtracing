@@ -11,7 +11,6 @@ use glutin::{
 use glutin_winit::DisplayBuilder;
 use std::{num::NonZeroU32};
 use winit::raw_window_handle::HasWindowHandle;
-use nalgebra_glm as glm;
 use winit::{
     application::ApplicationHandler,
     event::{WindowEvent, MouseButton, ElementState},
@@ -22,9 +21,11 @@ use std::path::{Path, PathBuf};
 
 mod opengl;
 mod scene;
+mod tasks;
 use opengl::{ComputeShader, GeometryShader, Image2D, StorageBuffer, UniformBuffer};
 use opengl::shaders::{BLIT_FRAG_SRC, BLIT_VERT_SRC, RT_COMPUTE_SRC};
-use scene::{Camera, CameraData, Sphere, Triangle};
+use scene::{Camera, CameraData, Scene};
+use tasks::{hello_world, fizz_buzz, InventoryItem, is_available, is_palindrome, c_to_f, c_to_k, f_to_c, k_to_c};
 
 const RESOURCE_ROOT: &str = "res";
 
@@ -72,6 +73,7 @@ struct App {
     sample_count: u32,
     mouse_down: bool,
     shift_down: bool,
+    ctrl_down: bool,
     last_cursor: Option<(f32, f32)>,
     
     rt_compute: Option<ComputeShader>,
@@ -101,6 +103,7 @@ impl App {
             sample_count: 0,
             mouse_down: false,
             shift_down: false,
+            ctrl_down: false,
             last_cursor: None,
 
             rt_compute: None,
@@ -131,26 +134,9 @@ impl App {
             
             self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
             
-            let spheres = vec![
-                Sphere::glass(glm::vec3(-2.25, 0.0, 0.0), 0.5, 1.5),
-                Sphere::diffuse(glm::vec3(-0.75, 0.0, 0.0), 0.5, glm::vec3(1.0, 1.0, 1.0)),
-                Sphere::metal(glm::vec3(0.75, 0.0, 0.0), 0.5, glm::vec3(1.0, 1.0, 1.0), 0.0),
-                Sphere::metal(glm::vec3(2.25, 0.0, 0.0), 0.5, glm::vec3(0.5, 0.5, 1.0), 0.3),
-                ];
-            self.sphere_ssbo = Some(StorageBuffer::from_slice(&spheres, 0));
-
-            let y = -0.5;
-            let h = 5.0;
-            let c0 = glm::vec3(-h, y, -h);
-            let c1 = glm::vec3( h, y, -h);
-            let c2 = glm::vec3( h, y,  h);
-            let c3 = glm::vec3(-h, y,  h);
-            let ground = glm::vec3(0.7, 0.7, 0.7);
-            let tris = vec![
-                Triangle::diffuse(c0, c1, c2, ground),
-                Triangle::diffuse(c0, c2, c3, ground),
-            ];
-            self.triangle_ssbo = Some(StorageBuffer::from_slice(&tris, 1));
+            let scene = Scene::demo();
+            self.sphere_ssbo = Some(StorageBuffer::from_slice(&scene.spheres, 0));
+            self.triangle_ssbo = Some(StorageBuffer::from_slice(&scene.triangles, 1));
                 
             self.camera = Some(Camera::new());
         }
@@ -222,7 +208,6 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_attrs = Window::default_attributes()
             .with_title(&self.title)
@@ -296,6 +281,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.shift_down = mods.state().shift_key();
+                self.ctrl_down = mods.state().control_key();
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32, position.y as f32);
@@ -304,7 +290,13 @@ impl ApplicationHandler for App {
                         let dx = x - lx;
                         let dy = y - ly;
                         if let Some(cam) = &mut self.camera {
-                            if self.shift_down { cam.zoom(dy); } else { cam.orbit(dx, dy); }
+                            if self.ctrl_down {
+                                cam.pan(dx, dy);
+                            } else if self.shift_down {
+                                cam.zoom(dy);
+                            } else {
+                                cam.orbit(dx, dy);
+                            }
                         }
                         self.camera_dirty = true;
                     }
@@ -317,7 +309,52 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    println!("Hello, World!");
+    hello_world();
+
+    fizz_buzz(50);
+
+    // database
+    let inventory = vec![
+        InventoryItem{name: String::from("Apple"), count: 10},
+        InventoryItem{name: String::from("Banana"), count: 5},
+    ];
+    is_available(&inventory, "Apple");
+    is_available(&inventory, "Orange");
+
+    // slicing
+    let text = String::from("Hello World");
+    let hello = &text[0..5];
+    println!("{}", hello);
+
+    // concatenation
+    let first = String::from("Hello");
+    let second = String::from(" World");
+    let result = first + &second;
+    println!("{}", result);
+
+    // palindrome testing
+    println!("{}", is_palindrome("racecar"));
+    println!("{}", is_palindrome("hello"));
+
+    // arrays / vectors (push, remove, pop)
+    let _numbers = [1, 2, 3, 4, 5];
+    let mut vector = vec![1, 2, 3];
+    vector.push(4);
+    println!("{:?}", vector);
+    vector.remove(1);
+    println!("{:?}", vector);
+    vector.pop();
+    println!("{:?}", vector);
+
+    // functions
+    let celsius = 25.0;
+    println!("{} C = {} F", celsius, c_to_f(celsius));
+    println!("{} C = {} K", celsius, c_to_k(celsius));
+    let fahrenheit = 77.0;
+    println!("{} F = {} C", fahrenheit, f_to_c(fahrenheit));
+    let kelvin = 298.15;
+    println!("{} K = {} C", kelvin, k_to_c(kelvin));
+
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new("Path Tracing Demo", 1024, 640);
     event_loop.run_app(&mut app).unwrap();

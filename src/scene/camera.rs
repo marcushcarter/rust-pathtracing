@@ -83,4 +83,10 @@ impl Camera {
         self.distance *= 1.0 + dy * SENS;
         self.distance = self.distance.clamp(self.min_distance, self.max_distance);
     }
+
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        let (_, right, up) = self.basis();
+        let sens = 0.002 * self.distance;
+        self.target += right * (-dx * sens) + up * (dy * sens);
+    }
 }
