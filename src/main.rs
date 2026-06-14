@@ -14,7 +14,7 @@ use glutin_winit::DisplayBuilder;
 use std::{/*fs::OpenOptions,*/ num::NonZeroU32};
 use std::time::Instant;
 use winit::raw_window_handle::HasWindowHandle;
-// use nalgebra_glm as glm;
+use nalgebra_glm as glm;
 use winit::{
     application::ApplicationHandler,
     event::{WindowEvent, MouseButton, ElementState},
@@ -42,36 +42,37 @@ use ubo::UniformBuffer;
 
 #[repr(C)]
 struct CameraData {
-    cam_pos: [f32; 3],
+    pos: glm::Vec3,
     tan_half_fov: f32,
-    cam_forward: [f32; 3],
+    forward: glm::Vec3,
     _pad0: f32,
-    cam_right: [f32; 3],
+    right: glm::Vec3,
     _pad1: f32,
-    cam_up: [f32; 3],
+    up: glm::Vec3,
     _pad2: f32,
-    resolution: [f32; 2],
+    resolution: glm::Vec2,
     _pad3: [f32; 2],
 }
 
-impl CameraData {
-    fn camera_to_data(cam: &Camera, width: u32, height: u32) -> Self {
-        let pos = cam.position();
-        let (fwd, right, up) = cam.basis();
-        Self {
-            cam_pos: [pos.x, pos.y, pos.z],
-            tan_half_fov: cam.tan_half_fov(),
-            cam_forward: [fwd.x, fwd.y, fwd.z],
-            _pad0: 0.0,
-            cam_right: [right.x, right.y, right.z],
-            _pad1: 0.0,
-            cam_up: [up.x, up.y, up.z],
-            _pad2: 0.0,
-            resolution: [width as f32, height as f32],
-            _pad3: [0.0, 0.0],
-        }
-    }
-}
+// #[repr(C)]
+// struct Sphere {
+//     center: glm::Vec3,
+//     radius: f32,
+//     albedo: glm::Vec3,
+//     fuzz: f32,
+//     mat: i32,
+//     ior: f32,
+//     _pad: [f32; 2],
+// }
+
+// #[repr(C)]
+// struct Triangle {
+//     v0: [f32;3], _p0: f32,
+//     v1: [f32;3], _p1: f32,
+//     v2: [f32;3], _p2: f32,
+//     albedo: [f32;3], fuzz: f32,
+//     mat_type: i32, ior: f32, _pad: [f32;2],
+// }
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -168,7 +169,33 @@ impl App {
     fn render(&mut self) {
         unsafe {            
             if let (Some(rt), Some(img), Some(cam), Some(ubo)) = (&self.rt_compute, &self.output_tex, &self.camera, &self.camera_ubo) {
-                ubo.update(&CameraData::camera_to_data(cam, self.width, self.height));
+                
+                let cp = cam.pitch.cos();
+                let offset = glm::vec3(cam.distance * cp * cam.yaw.sin(), cam.distance * cam.pitch.sin(), cam.distance * cp * cam.yaw.cos());
+                let pos = cam.target + offset;
+
+                let fwd = glm::normalize(&(cam.target - pos));
+                let world_up = glm::vec3(0.0, 1.0, 0.0);
+                let right = glm::normalize(&glm::cross(&fwd, &world_up));
+                let up = glm::cross(&right, &fwd);
+
+                let camera_data = CameraData {
+                    pos,
+                    tan_half_fov: (cam.fov_y * 0.5).tan(),
+
+                    forward: fwd,
+                    _pad0: 0.0,
+
+                    right,
+                    _pad1: 0.0,
+
+                    up,
+                    _pad2: 0.0,
+
+                    resolution: glm::vec2(self.width as f32, self.height as f32, ),
+                    _pad3: [0.0, 0.0],
+                };
+                ubo.update(&camera_data);
 
                 rt.bind();
                 rt.set_vec2("uResolution", self.width as f32, self.height as f32);

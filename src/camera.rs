@@ -1,15 +1,15 @@
 use nalgebra_glm as glm;
 
 pub struct Camera {
-    target: glm::Vec3,
-    distance: f32,
-    yaw: f32,
-    pitch: f32,
-    fov_y: f32,
+    pub target: glm::Vec3,
+    pub distance: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub fov_y: f32,
 
-    min_distance: f32,
-    max_distance: f32,
-    max_pitch: f32,
+    pub min_distance: f32,
+    pub max_distance: f32,
+    pub max_pitch: f32,
 }
 
 impl Camera {
@@ -24,29 +24,6 @@ impl Camera {
             max_distance: 50.0,
             max_pitch: 89.0_f32.to_radians(),
         }
-    }
-
-    pub fn position(&self) -> glm::Vec3 {
-        let cp = self.pitch.cos();
-        let offset = glm::vec3(
-            self.distance * cp * self.yaw.sin(),
-            self.distance * self.pitch.sin(),
-            self.distance * cp * self.yaw.cos(),
-        );
-        self.target + offset
-    }
-
-    pub fn basis(&self) -> (glm::Vec3, glm::Vec3, glm::Vec3) {
-        let pos = self.position();
-        let forward = glm::normalize(&(self.target - pos));
-        let world_up = glm::vec3(0.0, 1.0, 0.0);
-        let right = glm::normalize(&glm::cross(&forward, &world_up));
-        let up = glm::cross(&right, &forward); // already unit-length (both inputs unit & orthogonal)
-        (forward, right, up)
-    }
-
-    pub fn tan_half_fov(&self) -> f32 {
-        (self.fov_y * 0.5).tan()
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {
