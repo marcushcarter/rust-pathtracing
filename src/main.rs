@@ -34,45 +34,17 @@ use comp_shader::ComputeShader;
 mod image_2d;
 use image_2d::Image2D;
 
-mod camera;
-use camera::Camera;
-
 mod ubo;
 use ubo::UniformBuffer;
 
-#[repr(C)]
-struct CameraData {
-    pos: glm::Vec3,
-    tan_half_fov: f32,
-    forward: glm::Vec3,
-    _pad0: f32,
-    right: glm::Vec3,
-    _pad1: f32,
-    up: glm::Vec3,
-    _pad2: f32,
-    resolution: glm::Vec2,
-    _pad3: [f32; 2],
-}
+mod sbo;
+use sbo::StorageBuffer;
 
-// #[repr(C)]
-// struct Sphere {
-//     center: glm::Vec3,
-//     radius: f32,
-//     albedo: glm::Vec3,
-//     fuzz: f32,
-//     mat: i32,
-//     ior: f32,
-//     _pad: [f32; 2],
-// }
+mod camera;
+use camera::{Camera, CameraData};
 
-// #[repr(C)]
-// struct Triangle {
-//     v0: [f32;3], _p0: f32,
-//     v1: [f32;3], _p1: f32,
-//     v2: [f32;3], _p2: f32,
-//     albedo: [f32;3], fuzz: f32,
-//     mat_type: i32, ior: f32, _pad: [f32;2],
-// }
+mod prims;
+use prims::{Sphere /*, Triangle*/};
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -105,6 +77,7 @@ struct App {
     blit_shader: Option<GeometryShader>,
     output_tex: Option<Image2D>,
     camera_ubo: Option<UniformBuffer>,
+    sphere_ssbo: Option<StorageBuffer>,
     vao: GLuint,
 
     camera: Option<Camera>,
@@ -127,6 +100,7 @@ impl App {
             blit_shader: None,
             output_tex: None,
             camera_ubo: None,
+            sphere_ssbo: None,
             vao: 0,
 
             camera: None,
@@ -143,6 +117,14 @@ impl App {
             self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
 
             self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
+
+            let spheres = vec![
+                Sphere::glass(glm::vec3(-2.25, 0.0, 0.0), 0.5, 1.5),
+                Sphere::diffuse(glm::vec3(-0.75, 0.0, 0.0), 0.5, glm::vec3(1.0, 1.0, 1.0)),
+                Sphere::metal(glm::vec3(0.75, 0.0, 0.0), 0.5, glm::vec3(1.0, 1.0, 1.0), 0.0),
+                Sphere::metal(glm::vec3(2.25, 0.0, 0.0), 0.5, glm::vec3(0.5, 0.5, 1.0), 0.3),
+            ];
+            self.sphere_ssbo = Some(StorageBuffer::from_slice(&spheres, 0));
             
             gl::GenVertexArrays(1, &mut self.vao);
 

@@ -13,6 +13,20 @@ pub const RT_COMPUTE_SRC: &str = r#"
         vec2  uResolution;
     };
 
+    struct Sphere {
+        vec3  center;
+        float radius;
+        vec3  albedo;
+        float fuzz;
+        int   matType;
+        float ior;
+        vec2  _pad;
+    };
+
+    layout (std430, binding = 0) readonly buffer Spheres {
+        Sphere spheres[];
+    };
+
     void main() {
         ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
         if (pixel.x >= int(uResolution.x) || pixel.y >= int(uResolution.y)) return;
@@ -23,13 +37,25 @@ pub const RT_COMPUTE_SRC: &str = r#"
         vec3 ro = uCamPos;
         vec3 rd = normalize(uCamForward + uv.x * aspect * uTanHalfFov * uCamRight + uv.y * uTanHalfFov * uCamUp);
 
-        vec3 oc = ro - vec3(0.0);
-        float a = dot(rd, rd);
-        float b = 2.0 * dot(oc, rd);
-        float c = dot(oc, oc) - 0.25;
-        float disc = b * b - 4.0 * a * c;
+        float tClosest = 1e30;
+        bool  hit = false;
 
-        vec3 color = disc > 0.0 ? vec3(1.0, 0.0, 0.0) : rd;
+        for (int i = 0; i < spheres.length(); i++) {
+            vec3  oc = ro - spheres[i].center;
+            float a  = dot(rd, rd);
+            float b  = 2.0 * dot(oc, rd);
+            float c  = dot(oc, oc) - spheres[i].radius * spheres[i].radius;
+            float disc = b * b - 4.0 * a * c;
+            if (disc < 0.0) continue;
+
+            float t = (-b - sqrt(disc)) / (2.0 * a); // near root
+            if (t > 0.001 && t < tClosest) {
+                tClosest = t;
+                hit = true;
+            }
+        }
+
+        vec3 color = hit ? vec3(1.0, 0.0, 0.0) : rd * 0.5 + 0.5;
         imageStore(uOutput, pixel, vec4(color, 1.0));
     }
 "#;

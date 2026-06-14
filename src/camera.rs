@@ -12,11 +12,25 @@ pub struct Camera {
     pub max_pitch: f32,
 }
 
+#[repr(C)]
+pub struct CameraData {
+    pub pos: glm::Vec3,
+    pub tan_half_fov: f32,
+    pub forward: glm::Vec3,
+    pub _pad0: f32,
+    pub right: glm::Vec3,
+    pub _pad1: f32,
+    pub up: glm::Vec3,
+    pub _pad2: f32,
+    pub resolution: glm::Vec2,
+    pub _pad3: [f32; 2],
+}
+
 impl Camera {
     pub fn new() -> Self {
         Self {
             target: glm::vec3(0.0, 0.0, 0.0),
-            distance: 3.0,
+            distance: 4.0,
             yaw: 0.0,
             pitch: 0.0,
             fov_y: 60.0_f32.to_radians(),
