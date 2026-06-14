@@ -22,10 +22,16 @@ use winit::{
 };
 
 mod shaders;
-use shaders::{RTX_VERT_SRC, RTX_FRAG_SRC};
+use shaders::{RT_COMPUTE_SRC, BLIT_FRAG_SRC, BLIT_VERT_SRC};
 
 mod geom_shader;
 use geom_shader::GeometryShader;
+
+mod comp_shader;
+use comp_shader::ComputeShader;
+
+mod image_2d;
+use image_2d::Image2D;
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -55,9 +61,9 @@ struct App {
     last_frame: Instant,
     
     vao: GLuint,
-    vbo: GLuint,
-
-    rtx_shader: Option<GeometryShader>,
+    rt_compute: Option<ComputeShader>,
+    blit_shader: Option<GeometryShader>,
+    output_tex: Option<Image2D>,
 }
 
 impl App {
@@ -71,35 +77,21 @@ impl App {
             last_frame: Instant::now(),
 
             vao: 0,
-            vbo: 0,
-            rtx_shader: None,
+            rt_compute: None,
+            blit_shader: None,
+            output_tex: None,
         }
     }
 
     fn setup(&mut self, width: u32, height: u32) {
  
         unsafe {
-            self.rtx_shader = Some(GeometryShader::new(RTX_VERT_SRC, RTX_FRAG_SRC));
+            self.rt_compute = Some(ComputeShader::new(RT_COMPUTE_SRC));
+            self.blit_shader = Some(GeometryShader::new(BLIT_VERT_SRC, BLIT_FRAG_SRC));
             
-            let vertices: [f32; 9] = [
-                -1.0,  3.0, 0.0,
-                -1.0, -1.0, 0.0,
-                3.0, -1.0, 0.0,
-            ];
-
             gl::GenVertexArrays(1, &mut self.vao);
-            gl::GenBuffers(1, &mut self.vbo);
 
-            gl::BindVertexArray(self.vao);
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::BufferData(gl::ARRAY_BUFFER, (vertices.len() * std::mem::size_of::<f32>()) as isize, vertices.as_ptr() as *const _, gl::STATIC_DRAW);
-
-            let stride = (3 * std::mem::size_of::<f32>()) as GLsizei;
-            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, 0 as *const _);
-            gl::EnableVertexAttribArray(0);
-
-            gl::BindVertexArray(0);
+            self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
         }
         println!("Setup\n");
     }
@@ -107,9 +99,10 @@ impl App {
     fn shutdown(&mut self) {
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);
-            gl::DeleteBuffers(1, &self.vbo);
         }
-        self.rtx_shader = None;
+        self.rt_compute = None;
+        self.blit_shader = None;
+        self.output_tex = None;
         println!("Shutdown\n");
     }
 
@@ -117,12 +110,25 @@ impl App {
     }
 
     fn render(&mut self) {
-        unsafe {
+        unsafe {            
+            if let (Some(rt), Some(img)) = (&self.rt_compute, &self.output_tex) {
+                rt.bind();
+                rt.set_vec2("uResolution", self.width as f32, self.height as f32);
+                img.bind_storage(0, gl::WRITE_ONLY);
+
+                let gx = (self.width + 7) / 8;
+                let gy = (self.height + 7) / 8;
+                rt.dispatch(gx, gy, 1);
+                gl::MemoryBarrier(gl::TEXTURE_FETCH_BARRIER_BIT);
+            }
+
             gl::ClearColor(0.0, 0.0, 0.0, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
-
-            if let Some(shader) = &self.rtx_shader {
-                shader.bind();
+            if let Some(blit) = &self.blit_shader {
+                blit.bind();
+                if let Some(img) = &self.output_tex {
+                    img.bind_sampled(0);
+                }
                 gl::BindVertexArray(self.vao);
                 gl::DrawArrays(gl::TRIANGLES, 0, 3);
             }
@@ -130,9 +136,14 @@ impl App {
     }
 
     fn on_resize(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
         if let Some(gl) = &self.gl {
             gl.resize(width, height);
             unsafe { gl::Viewport(0, 0, width as GLsizei, height as GLsizei); }
+        }
+        if let Some(img) = &mut self.output_tex {
+            img.resize(width, height);
         }
     }
 }
