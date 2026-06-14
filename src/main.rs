@@ -37,6 +37,42 @@ use image_2d::Image2D;
 mod camera;
 use camera::Camera;
 
+mod ubo;
+use ubo::UniformBuffer;
+
+#[repr(C)]
+struct CameraData {
+    cam_pos: [f32; 3],
+    tan_half_fov: f32,
+    cam_forward: [f32; 3],
+    _pad0: f32,
+    cam_right: [f32; 3],
+    _pad1: f32,
+    cam_up: [f32; 3],
+    _pad2: f32,
+    resolution: [f32; 2],
+    _pad3: [f32; 2],
+}
+
+impl CameraData {
+    fn camera_to_data(cam: &Camera, width: u32, height: u32) -> Self {
+        let pos = cam.position();
+        let (fwd, right, up) = cam.basis();
+        Self {
+            cam_pos: [pos.x, pos.y, pos.z],
+            tan_half_fov: cam.tan_half_fov(),
+            cam_forward: [fwd.x, fwd.y, fwd.z],
+            _pad0: 0.0,
+            cam_right: [right.x, right.y, right.z],
+            _pad1: 0.0,
+            cam_up: [up.x, up.y, up.z],
+            _pad2: 0.0,
+            resolution: [width as f32, height as f32],
+            _pad3: [0.0, 0.0],
+        }
+    }
+}
+
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
     context: glutin::context::PossiblyCurrentContext,
@@ -64,10 +100,11 @@ struct App {
     gl: Option<GlContext>,
     last_frame: Instant,
     
-    vao: GLuint,
     rt_compute: Option<ComputeShader>,
     blit_shader: Option<GeometryShader>,
     output_tex: Option<Image2D>,
+    camera_ubo: Option<UniformBuffer>,
+    vao: GLuint,
 
     camera: Option<Camera>,
     mouse_down: bool,
@@ -88,6 +125,7 @@ impl App {
             rt_compute: None,
             blit_shader: None,
             output_tex: None,
+            camera_ubo: None,
             vao: 0,
 
             camera: None,
@@ -102,6 +140,9 @@ impl App {
             self.rt_compute = Some(ComputeShader::new(RT_COMPUTE_SRC));
             self.blit_shader = Some(GeometryShader::new(BLIT_VERT_SRC, BLIT_FRAG_SRC));
             self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
+
+            self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
+            
             gl::GenVertexArrays(1, &mut self.vao);
 
             self.camera = Some(Camera::new());
@@ -116,6 +157,7 @@ impl App {
         self.rt_compute = None;
         self.blit_shader = None;
         self.output_tex = None;
+        self.camera_ubo = None;
         self.camera = None;
         println!("Shutdown\n");
     }
@@ -125,17 +167,11 @@ impl App {
 
     fn render(&mut self) {
         unsafe {            
-            if let (Some(rt), Some(img), Some(cam)) = (&self.rt_compute, &self.output_tex, &self.camera) {
+            if let (Some(rt), Some(img), Some(cam), Some(ubo)) = (&self.rt_compute, &self.output_tex, &self.camera, &self.camera_ubo) {
+                ubo.update(&CameraData::camera_to_data(cam, self.width, self.height));
+
                 rt.bind();
                 rt.set_vec2("uResolution", self.width as f32, self.height as f32);
-                
-                let pos = cam.position();
-                let (fwd, right, up) = cam.basis();
-                rt.set_vec3("uCamPos", pos.x, pos.y, pos.z);
-                rt.set_vec3("uCamForward", fwd.x, fwd.y, fwd.z);
-                rt.set_vec3("uCamRight", right.x, right.y, right.z);
-                rt.set_vec3("uCamUp", up.x, up.y, up.z);
-                rt.set_float("uTanHalfFov", cam.tan_half_fov());
 
                 img.bind_storage(0, gl::WRITE_ONLY);
                 let gx = (self.width + 7) / 8;

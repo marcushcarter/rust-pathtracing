@@ -1,14 +1,17 @@
 pub const RT_COMPUTE_SRC: &str = r#"
     #version 460 core
     layout (local_size_x = 8, local_size_y = 8) in;
+
     layout (rgba32f, binding = 0) uniform image2D uOutput;
 
-    uniform vec2  uResolution;
-    uniform vec3  uCamPos;
-    uniform vec3  uCamForward;
-    uniform vec3  uCamRight;
-    uniform vec3  uCamUp;
-    uniform float uTanHalfFov;
+    layout (std140, binding = 0) uniform Camera {
+        vec3  uCamPos;
+        float uTanHalfFov;
+        vec3  uCamForward;
+        vec3  uCamRight;
+        vec3  uCamUp;
+        vec2  uResolution;
+    };
 
     void main() {
         ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -18,31 +21,13 @@ pub const RT_COMPUTE_SRC: &str = r#"
         float aspect = uResolution.x / uResolution.y;
 
         vec3 ro = uCamPos;
-        vec3 rd = normalize(
-            uCamForward
-            + uv.x * aspect * uTanHalfFov * uCamRight
-            + uv.y * uTanHalfFov * uCamUp
-        );
+        vec3 rd = normalize(uCamForward + uv.x * aspect * uTanHalfFov * uCamRight + uv.y * uTanHalfFov * uCamUp);
 
         vec3 oc = ro - vec3(0.0);
         float a = dot(rd, rd);
         float b = 2.0 * dot(oc, rd);
         float c = dot(oc, oc) - 0.25;
         float disc = b * b - 4.0 * a * c;
-            
-        // vec3 color;
-        // if (disc > 0.0) {
-        //     float t = (-b - sqrt(disc)) / (2.0 * a);
-        //     if (t > 0.0) {
-        //         vec3 hitPos = ro + rd * t;
-        //         vec3 normal = normalize(hitPos);
-        //         color = normal * 0.5 + 0.5;
-        //     } else {
-        //         color = vec3(0.0);
-        //     }
-        // } else {
-        //     color = rd;
-        // }
 
         vec3 color = disc > 0.0 ? vec3(1.0, 0.0, 0.0) : rd;
         imageStore(uOutput, pixel, vec4(color, 1.0));

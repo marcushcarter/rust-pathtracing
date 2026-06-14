@@ -60,15 +60,15 @@ impl ComputeShader
     // pub fn set_int(&self, name: &str, v: i32) {
     //     unsafe { gl::Uniform1i(self.loc(name), v); }
     // }
-    pub fn set_float(&self, name: &str, v: f32) {
-        unsafe { gl::Uniform1f(self.loc(name), v); }
-    }
+    // pub fn set_float(&self, name: &str, v: f32) {
+    //     unsafe { gl::Uniform1f(self.loc(name), v); }
+    // }
     pub fn set_vec2(&self, name: &str, x: f32, y: f32) {
         unsafe { gl::Uniform2f(self.loc(name), x, y); }
     }
-    pub fn set_vec3(&self, name: &str, x: f32, y: f32, z: f32) {
-        unsafe { gl::Uniform3f(self.loc(name), x, y, z); }
-    }
+    // pub fn set_vec3(&self, name: &str, x: f32, y: f32, z: f32) {
+    //     unsafe { gl::Uniform3f(self.loc(name), x, y, z); }
+    // }
 }
 
 impl Drop for ComputeShader {
