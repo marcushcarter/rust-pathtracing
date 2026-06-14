@@ -11,12 +11,13 @@ use glutin::{
     surface::{SurfaceAttributesBuilder, WindowSurface},
 };
 use glutin_winit::DisplayBuilder;
-use std::num::NonZeroU32;
+use std::{/*fs::OpenOptions,*/ num::NonZeroU32};
 use std::time::Instant;
 use winit::raw_window_handle::HasWindowHandle;
+// use nalgebra_glm as glm;
 use winit::{
     application::ApplicationHandler,
-    event::WindowEvent,
+    event::{WindowEvent, MouseButton, ElementState},
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
@@ -32,6 +33,9 @@ use comp_shader::ComputeShader;
 
 mod image_2d;
 use image_2d::Image2D;
+
+mod camera;
+use camera::Camera;
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -64,6 +68,11 @@ struct App {
     rt_compute: Option<ComputeShader>,
     blit_shader: Option<GeometryShader>,
     output_tex: Option<Image2D>,
+
+    camera: Option<Camera>,
+    mouse_down: bool,
+    shift_down: bool,
+    last_cursor: Option<(f32, f32)>,
 }
 
 impl App {
@@ -76,22 +85,26 @@ impl App {
             gl: None,
             last_frame: Instant::now(),
 
-            vao: 0,
             rt_compute: None,
             blit_shader: None,
             output_tex: None,
+            vao: 0,
+
+            camera: None,
+            mouse_down: false,
+            shift_down: false,
+            last_cursor: None,
         }
     }
 
     fn setup(&mut self, width: u32, height: u32) {
- 
         unsafe {
             self.rt_compute = Some(ComputeShader::new(RT_COMPUTE_SRC));
             self.blit_shader = Some(GeometryShader::new(BLIT_VERT_SRC, BLIT_FRAG_SRC));
-            
+            self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
             gl::GenVertexArrays(1, &mut self.vao);
 
-            self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
+            self.camera = Some(Camera::new());
         }
         println!("Setup\n");
     }
@@ -103,6 +116,7 @@ impl App {
         self.rt_compute = None;
         self.blit_shader = None;
         self.output_tex = None;
+        self.camera = None;
         println!("Shutdown\n");
     }
 
@@ -111,11 +125,19 @@ impl App {
 
     fn render(&mut self) {
         unsafe {            
-            if let (Some(rt), Some(img)) = (&self.rt_compute, &self.output_tex) {
+            if let (Some(rt), Some(img), Some(cam)) = (&self.rt_compute, &self.output_tex, &self.camera) {
                 rt.bind();
                 rt.set_vec2("uResolution", self.width as f32, self.height as f32);
-                img.bind_storage(0, gl::WRITE_ONLY);
+                
+                let pos = cam.position();
+                let (fwd, right, up) = cam.basis();
+                rt.set_vec3("uCamPos", pos.x, pos.y, pos.z);
+                rt.set_vec3("uCamForward", fwd.x, fwd.y, fwd.z);
+                rt.set_vec3("uCamRight", right.x, right.y, right.z);
+                rt.set_vec3("uCamUp", up.x, up.y, up.z);
+                rt.set_float("uTanHalfFov", cam.tan_half_fov());
 
+                img.bind_storage(0, gl::WRITE_ONLY);
                 let gx = (self.width + 7) / 8;
                 let gy = (self.height + 7) / 8;
                 rt.dispatch(gx, gy, 1);
@@ -229,6 +251,31 @@ impl ApplicationHandler for App {
                 }
 
                 self.window.as_ref().unwrap().request_redraw();
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == MouseButton::Left {
+                    self.mouse_down = state == ElementState::Pressed;
+                }
+            }
+            WindowEvent::ModifiersChanged(mods) => {
+                self.shift_down = mods.state().shift_key();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let (x, y) = (position.x as f32, position.y as f32);
+                if self.mouse_down {
+                    if let Some((lx, ly)) = self.last_cursor {
+                        let dx = x - lx;
+                        let dy = y - ly;
+                        if let Some(cam) = &mut self.camera {
+                            if self.shift_down {
+                                cam.zoom(dy);
+                            } else {
+                                cam.orbit(dx, dy);
+                            }
+                        }
+                    }
+                }
+                self.last_cursor = Some((x, y)); // always track, so the first drag frame doesn't jump
             }
             _ => {}
         }

@@ -57,9 +57,9 @@ impl ComputeShader
         }
     }
 
-    pub fn set_int(&self, name: &str, v: i32) {
-        unsafe { gl::Uniform1i(self.loc(name), v); }
-    }
+    // pub fn set_int(&self, name: &str, v: i32) {
+    //     unsafe { gl::Uniform1i(self.loc(name), v); }
+    // }
     pub fn set_float(&self, name: &str, v: f32) {
         unsafe { gl::Uniform1f(self.loc(name), v); }
     }
