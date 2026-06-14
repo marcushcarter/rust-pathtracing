@@ -1,4 +1,4 @@
-#![windows_subsystem = "console"]
+// #![windows_subsystem = "console"]
 
 // IF YOU ARE READING THIS RUST MAKES ME WANT TO THROW MY COMPUTER OFF A CLIFF
 
@@ -11,8 +11,7 @@ use glutin::{
     surface::{SurfaceAttributesBuilder, WindowSurface},
 };
 use glutin_winit::DisplayBuilder;
-use std::{/*fs::OpenOptions,*/ num::NonZeroU32};
-use std::time::Instant;
+use std::{num::NonZeroU32};
 use winit::raw_window_handle::HasWindowHandle;
 use nalgebra_glm as glm;
 use winit::{
@@ -21,36 +20,28 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
+use std::path::{Path, PathBuf};
 
-mod shaders;
-use shaders::{RT_COMPUTE_SRC, BLIT_FRAG_SRC, BLIT_VERT_SRC};
+mod opengl;
+mod scene;
 
-mod geom_shader;
-use geom_shader::GeometryShader;
+use opengl::{ComputeShader, GeometryShader, Image2D, StorageBuffer, UniformBuffer};
+use opengl::shaders::{BLIT_FRAG_SRC, BLIT_VERT_SRC, RT_COMPUTE_SRC};
+use scene::{Camera, CameraData, Sphere, Triangle};
 
-mod comp_shader;
-use comp_shader::ComputeShader;
+const RESOURCE_ROOT: &str = "res";
 
-mod image_2d;
-use image_2d::Image2D;
-
-mod ubo;
-use ubo::UniformBuffer;
-
-mod sbo;
-use sbo::StorageBuffer;
-
-mod camera;
-use camera::{Camera, CameraData};
-
-mod sphere;
-use sphere::Sphere;
-
-mod triangle;
-use triangle::Triangle;
-
-// mod light;
-// use light::Light;
+fn resource_path(name: &str) -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join(RESOURCE_ROOT).join(name);
+            if p.exists() { return p; }
+        }
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOURCE_ROOT).join(name);
+    if dev.exists() { return dev; }
+    Path::new(RESOURCE_ROOT).join(name)
+}
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -77,24 +68,25 @@ struct App {
     height: u32,
     window: Option<Window>,
     gl: Option<GlContext>,
-    last_frame: Instant,
     frame: u32,
-    sample_count: u32,
-    camera_dirty: bool,
-    
-    rt_compute: Option<ComputeShader>,
-    blit_shader: Option<GeometryShader>,
-    output_tex: Option<Image2D>,
-    vao: GLuint,
-
-    sphere_ssbo: Option<StorageBuffer>,
-    triangle_ssbo: Option<StorageBuffer>,
     
     camera: Option<Camera>,
-    camera_ubo: Option<UniformBuffer>,
+    camera_dirty: bool,
+    sample_count: u32,
     mouse_down: bool,
     shift_down: bool,
     last_cursor: Option<(f32, f32)>,
+    
+    rt_compute: Option<ComputeShader>,
+    blit_shader: Option<GeometryShader>,
+    
+    output_tex: Option<Image2D>,
+    env_tex: Option<Image2D>,
+    
+    vao: GLuint,
+    camera_ubo: Option<UniformBuffer>,
+    sphere_ssbo: Option<StorageBuffer>,
+    triangle_ssbo: Option<StorageBuffer>,
 }
 
 impl App {
@@ -105,24 +97,25 @@ impl App {
             height,
             window: None,
             gl: None,
-            last_frame: Instant::now(),
             frame: 0,
-            sample_count: 0,
-            camera_dirty: false,
-
-            rt_compute: None,
-            blit_shader: None,
-            output_tex: None,
-            vao: 0,
-
-            sphere_ssbo: None,
-            triangle_ssbo: None,
             
             camera: None,
-            camera_ubo: None,
+            camera_dirty: false,
+            sample_count: 0,
             mouse_down: false,
             shift_down: false,
             last_cursor: None,
+
+            rt_compute: None,
+            blit_shader: None,
+
+            output_tex: None,
+            env_tex: None,
+            
+            vao: 0,
+            camera_ubo: None,
+            sphere_ssbo: None,
+            triangle_ssbo: None,
         }
     }
 
@@ -130,9 +123,16 @@ impl App {
         unsafe {
             self.rt_compute = Some(ComputeShader::new(RT_COMPUTE_SRC));
             self.blit_shader = Some(GeometryShader::new(BLIT_VERT_SRC, BLIT_FRAG_SRC));
+            
             self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
             
+            let hdr = image::open(resource_path("kloofendal_48d_partly_cloudy_puresky_2k.hdr")).expect("failed to load HDR skybox").to_rgba32f();
+            let (hw, hh) = hdr.dimensions();
+            self.env_tex = Some(Image2D::load_rgba_f32(hw, hh, &hdr.into_raw()));
+            
             gl::GenVertexArrays(1, &mut self.vao);
+            
+            self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
             
             let spheres = vec![
                 Sphere::glass(glm::vec3(-2.25, 0.0, 0.0), 0.5, 1.5),
@@ -149,7 +149,6 @@ impl App {
             let c2 = glm::vec3( h, y,  h);
             let c3 = glm::vec3(-h, y,  h);
             let ground = glm::vec3(0.7, 0.7, 0.7);
-            
             let tris = vec![
                 Triangle::diffuse(c0, c1, c2, ground),
                 Triangle::diffuse(c0, c2, c3, ground),
@@ -157,7 +156,6 @@ impl App {
             self.triangle_ssbo = Some(StorageBuffer::from_slice(&tris, 1));
                 
             self.camera = Some(Camera::new());
-            self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
         }
         println!("Setup\n");
     }
@@ -169,12 +167,12 @@ impl App {
         self.rt_compute = None;
         self.blit_shader = None;
         self.output_tex = None;
+        self.env_tex = None;
         self.camera_ubo = None;
+        self.sphere_ssbo = None;
+        self.triangle_ssbo = None;
         self.camera = None;
         println!("Shutdown\n");
-    }
-
-    fn update(&mut self, _dt: f32) {
     }
 
     fn render(&mut self) {
@@ -200,17 +198,18 @@ impl App {
                     forward: fwd, _pad0: 0.0,
                     right, _pad1: 0.0,
                     up, _pad2: 0.0,
-                    resolution: glm::vec2(self.width as f32, self.height as f32, ),
+                    resolution: glm::vec2(self.width as f32, self.height as f32),
                     frame: self.frame,
                     sample_count: self.sample_count,
                 };
                 ubo.update(&camera_data);
 
                 rt.bind();
-                img.bind_storage(0, gl::WRITE_ONLY);
+                img.bind_storage(0, gl::READ_WRITE);
+                if let Some(env) = &self.env_tex { env.bind_sampled(1); }
                 let gx = (self.width + 7) / 8;
                 let gy = (self.height + 7) / 8;
-                rt.dispatch(gx, gy, 1);
+                if self.sample_count < 1000 { rt.dispatch(gx, gy, 1); }
                 gl::MemoryBarrier(gl::TEXTURE_FETCH_BARRIER_BIT | gl::SHADER_IMAGE_ACCESS_BARRIER_BIT);
             }
 
@@ -221,9 +220,7 @@ impl App {
             gl::Clear(gl::COLOR_BUFFER_BIT);
             if let Some(blit) = &self.blit_shader {
                 blit.bind();
-                if let Some(img) = &self.output_tex {
-                    img.bind_sampled(0);
-                }
+                if let Some(img) = &self.output_tex { img.bind_sampled(0); }
                 gl::BindVertexArray(self.vao);
                 gl::DrawArrays(gl::TRIANGLES, 0, 3);
             }
@@ -292,7 +289,6 @@ impl ApplicationHandler for App {
 
         self.gl = Some(GlContext { surface, context });
         self.window = Some(window);
-        self.last_frame = Instant::now();
 
         self.setup(self.width, self.height);
     }
@@ -309,21 +305,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let now = Instant::now();
-                let dt = now.duration_since(self.last_frame).as_secs_f32();
-                self.last_frame = now;
-                
-                let fps = (1.0 / dt) as u32;
-                let title = format!("{} | {:.4}ms | {}fps", self.title, dt * 1000.0, fps);
-                self.window.as_ref().unwrap().set_title(&title);
-
-                self.update(dt);
                 self.render();
-
-                if let Some(gl) = &self.gl {
-                    gl.swap_buffers();
-                }
-
+                if let Some(gl) = &self.gl { gl.swap_buffers(); }
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -356,6 +339,6 @@ impl ApplicationHandler for App {
 fn main() {
     println!("Hello, World!");
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new("Game", 800, 600);
+    let mut app = App::new("Path Tracing Demo", 1024, 640);
     event_loop.run_app(&mut app).unwrap();
 }

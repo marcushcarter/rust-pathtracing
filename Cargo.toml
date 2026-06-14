@@ -9,3 +9,4 @@ glutin-winit = "0.5"
 winit = "0.30"
 gl = "0.14"
 nalgebra-glm = "0.18"
+image = { version = "0.25", features = ["hdr"] }
