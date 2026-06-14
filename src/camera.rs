@@ -23,13 +23,14 @@ pub struct CameraData {
     pub up: glm::Vec3,
     pub _pad2: f32,
     pub resolution: glm::Vec2,
-    pub _pad3: [f32; 2],
+    pub frame: u32,
+    pub sample_count: u32,
 }
 
 impl Camera {
     pub fn new() -> Self {
         Self {
-            target: glm::vec3(0.0, 0.0, 0.0),
+            target: glm::vec3(0.0, 0.25, 0.0),
             distance: 4.0,
             yaw: 0.0,
             pitch: 0.0,

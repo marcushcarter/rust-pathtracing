@@ -43,8 +43,14 @@ use sbo::StorageBuffer;
 mod camera;
 use camera::{Camera, CameraData};
 
-mod prims;
-use prims::{Sphere /*, Triangle*/};
+mod sphere;
+use sphere::Sphere;
+
+mod triangle;
+use triangle::Triangle;
+
+// mod light;
+// use light::Light;
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -72,15 +78,20 @@ struct App {
     window: Option<Window>,
     gl: Option<GlContext>,
     last_frame: Instant,
+    frame: u32,
+    sample_count: u32,
+    camera_dirty: bool,
     
     rt_compute: Option<ComputeShader>,
     blit_shader: Option<GeometryShader>,
     output_tex: Option<Image2D>,
-    camera_ubo: Option<UniformBuffer>,
-    sphere_ssbo: Option<StorageBuffer>,
     vao: GLuint,
 
+    sphere_ssbo: Option<StorageBuffer>,
+    triangle_ssbo: Option<StorageBuffer>,
+    
     camera: Option<Camera>,
+    camera_ubo: Option<UniformBuffer>,
     mouse_down: bool,
     shift_down: bool,
     last_cursor: Option<(f32, f32)>,
@@ -95,15 +106,20 @@ impl App {
             window: None,
             gl: None,
             last_frame: Instant::now(),
+            frame: 0,
+            sample_count: 0,
+            camera_dirty: false,
 
             rt_compute: None,
             blit_shader: None,
             output_tex: None,
-            camera_ubo: None,
-            sphere_ssbo: None,
             vao: 0,
 
+            sphere_ssbo: None,
+            triangle_ssbo: None,
+            
             camera: None,
+            camera_ubo: None,
             mouse_down: false,
             shift_down: false,
             last_cursor: None,
@@ -115,20 +131,33 @@ impl App {
             self.rt_compute = Some(ComputeShader::new(RT_COMPUTE_SRC));
             self.blit_shader = Some(GeometryShader::new(BLIT_VERT_SRC, BLIT_FRAG_SRC));
             self.output_tex = Some(Image2D::new(width, height, gl::RGBA32F));
-
-            self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
-
+            
+            gl::GenVertexArrays(1, &mut self.vao);
+            
             let spheres = vec![
                 Sphere::glass(glm::vec3(-2.25, 0.0, 0.0), 0.5, 1.5),
                 Sphere::diffuse(glm::vec3(-0.75, 0.0, 0.0), 0.5, glm::vec3(1.0, 1.0, 1.0)),
                 Sphere::metal(glm::vec3(0.75, 0.0, 0.0), 0.5, glm::vec3(1.0, 1.0, 1.0), 0.0),
                 Sphere::metal(glm::vec3(2.25, 0.0, 0.0), 0.5, glm::vec3(0.5, 0.5, 1.0), 0.3),
-            ];
+                ];
             self.sphere_ssbo = Some(StorageBuffer::from_slice(&spheres, 0));
-            
-            gl::GenVertexArrays(1, &mut self.vao);
 
+            let y = -0.5;
+            let h = 5.0;
+            let c0 = glm::vec3(-h, y, -h);
+            let c1 = glm::vec3( h, y, -h);
+            let c2 = glm::vec3( h, y,  h);
+            let c3 = glm::vec3(-h, y,  h);
+            let ground = glm::vec3(0.7, 0.7, 0.7);
+            
+            let tris = vec![
+                Triangle::diffuse(c0, c1, c2, ground),
+                Triangle::diffuse(c0, c2, c3, ground),
+            ];
+            self.triangle_ssbo = Some(StorageBuffer::from_slice(&tris, 1));
+                
             self.camera = Some(Camera::new());
+            self.camera_ubo = Some(UniformBuffer::new(std::mem::size_of::<CameraData>(), 0));
         }
         println!("Setup\n");
     }
@@ -149,13 +178,17 @@ impl App {
     }
 
     fn render(&mut self) {
+        if self.camera_dirty {
+            self.sample_count = 0;
+            self.camera_dirty = false;
+        }
+
         unsafe {            
             if let (Some(rt), Some(img), Some(cam), Some(ubo)) = (&self.rt_compute, &self.output_tex, &self.camera, &self.camera_ubo) {
                 
                 let cp = cam.pitch.cos();
                 let offset = glm::vec3(cam.distance * cp * cam.yaw.sin(), cam.distance * cam.pitch.sin(), cam.distance * cp * cam.yaw.cos());
                 let pos = cam.target + offset;
-
                 let fwd = glm::normalize(&(cam.target - pos));
                 let world_up = glm::vec3(0.0, 1.0, 0.0);
                 let right = glm::normalize(&glm::cross(&fwd, &world_up));
@@ -164,30 +197,25 @@ impl App {
                 let camera_data = CameraData {
                     pos,
                     tan_half_fov: (cam.fov_y * 0.5).tan(),
-
-                    forward: fwd,
-                    _pad0: 0.0,
-
-                    right,
-                    _pad1: 0.0,
-
-                    up,
-                    _pad2: 0.0,
-
+                    forward: fwd, _pad0: 0.0,
+                    right, _pad1: 0.0,
+                    up, _pad2: 0.0,
                     resolution: glm::vec2(self.width as f32, self.height as f32, ),
-                    _pad3: [0.0, 0.0],
+                    frame: self.frame,
+                    sample_count: self.sample_count,
                 };
                 ubo.update(&camera_data);
 
                 rt.bind();
-                rt.set_vec2("uResolution", self.width as f32, self.height as f32);
-
                 img.bind_storage(0, gl::WRITE_ONLY);
                 let gx = (self.width + 7) / 8;
                 let gy = (self.height + 7) / 8;
                 rt.dispatch(gx, gy, 1);
-                gl::MemoryBarrier(gl::TEXTURE_FETCH_BARRIER_BIT);
+                gl::MemoryBarrier(gl::TEXTURE_FETCH_BARRIER_BIT | gl::SHADER_IMAGE_ACCESS_BARRIER_BIT);
             }
+
+            self.frame = self.frame.wrapping_add(1);
+            self.sample_count = self.sample_count.wrapping_add(1);
 
             gl::ClearColor(0.0, 0.0, 0.0, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
@@ -205,6 +233,7 @@ impl App {
     fn on_resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        self.sample_count = 0;
         if let Some(gl) = &self.gl {
             gl.resize(width, height);
             unsafe { gl::Viewport(0, 0, width as GLsizei, height as GLsizei); }
@@ -312,15 +341,12 @@ impl ApplicationHandler for App {
                         let dx = x - lx;
                         let dy = y - ly;
                         if let Some(cam) = &mut self.camera {
-                            if self.shift_down {
-                                cam.zoom(dy);
-                            } else {
-                                cam.orbit(dx, dy);
-                            }
+                            if self.shift_down { cam.zoom(dy); } else { cam.orbit(dx, dy); }
                         }
+                        self.camera_dirty = true;
                     }
                 }
-                self.last_cursor = Some((x, y)); // always track, so the first drag frame doesn't jump
+                self.last_cursor = Some((x, y));
             }
             _ => {}
         }

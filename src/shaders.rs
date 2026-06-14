@@ -5,58 +5,200 @@ pub const RT_COMPUTE_SRC: &str = r#"
     layout (rgba32f, binding = 0) uniform image2D uOutput;
 
     layout (std140, binding = 0) uniform Camera {
-        vec3  uCamPos;
+        vec3 uCamPos;
         float uTanHalfFov;
-        vec3  uCamForward;
-        vec3  uCamRight;
-        vec3  uCamUp;
-        vec2  uResolution;
+        vec3 uCamForward;
+        vec3 uCamRight;
+        vec3 uCamUp;
+        vec2 uResolution;
+        uint uFrame;
+        uint uSampleCount;
     };
 
     struct Sphere {
-        vec3  center;
+        vec3 center;
         float radius;
-        vec3  albedo;
+        vec3 albedo;
         float fuzz;
-        int   matType;
-        float ior;
-        vec2  _pad;
+        int matType;
+        float ior; vec2 _pad;
     };
 
-    layout (std430, binding = 0) readonly buffer Spheres {
-        Sphere spheres[];
+    struct Triangle {
+        vec3 v0; float _p0;
+        vec3 v1; float _p1;
+        vec3 v2; float _p2;
+        vec3 albedo;
+        float fuzz;
+        int matType;
+        float ior; vec2 _pad;
     };
+
+    layout (std430, binding = 0) readonly buffer Spheres { Sphere spheres[]; };
+    layout (std430, binding = 1) readonly buffer Triangles { Triangle tris[]; };
+
+    const int MAX_BOUNCES = 4;
+    const int SPP = 1;
+
+    uint pcg(inout uint state) {
+        state = state * 747796405u + 2891336453u;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+
+    float randf(inout uint state) {
+        return float(pcg(state)) / 4294967296.0;
+    }
+    
+    vec3 randUnit(inout uint state) {
+        float z = randf(state) * 2.0 - 1.0;
+        float a = randf(state) * 6.28318530718;
+        float r = sqrt(max(0.0, 1.0 - z * z));
+        return vec3(r * cos(a), r * sin(a), z);
+    }
+
+    struct Hit {
+        float t;
+        vec3 p;
+        vec3 n;
+        vec3 albedo;
+        int matType;
+        float fuzz;
+        float ior;
+        bool frontFace;
+    };
+
+    // Möller-Trumbore function
+    float hitTriangle(vec3 ro, vec3 rd, vec3 v0, vec3 v1, vec3 v2) {
+        const float EPS = 1e-7;
+        vec3 e1 = v1 - v0;
+        vec3 e2 = v2 - v0;
+        vec3 p  = cross(rd, e2);
+        float det = dot(e1, p);
+        if (abs(det) < EPS) return -1.0;
+        float invDet = 1.0 / det;
+        vec3 t = ro - v0;
+        float u = dot(t, p) * invDet;
+        if (u < 0.0 || u > 1.0) return -1.0;
+        vec3 q = cross(t, e1);
+        float v = dot(rd, q) * invDet;
+        if (v < 0.0 || u + v > 1.0) return -1.0;
+        return dot(e2, q) * invDet;
+    }
+
+    bool sceneHit(vec3 ro, vec3 rd, out Hit rec) {
+        float tClosest = 1e30;
+        bool hit = false;
+
+        for (int i = 0; i < spheres.length(); i++) {
+            vec3 oc = ro - spheres[i].center;
+            float a = dot(rd, rd);
+            float b = 2.0 * dot(oc, rd);
+            float c = dot(oc, oc) - spheres[i].radius * spheres[i].radius;
+            float disc = b * b - 4.0 * a * c;
+            if (disc < 0.0) continue;
+            float sq = sqrt(disc);
+            float t = (-b - sq) / (2.0 * a);
+            if (t <= 0.001) t = (-b + sq) / (2.0 * a);
+            if (t > 0.001 && t < tClosest) {
+                tClosest = t; hit = true;
+                rec.t = t;
+                rec.p = ro + rd * t;
+                vec3 outward = (rec.p - spheres[i].center) / spheres[i].radius;
+                rec.frontFace = dot(rd, outward) < 0.0;
+                rec.n = rec.frontFace ? outward : -outward;
+                rec.albedo = spheres[i].albedo;
+                rec.matType = spheres[i].matType;
+                rec.fuzz = spheres[i].fuzz;
+                rec.ior = spheres[i].ior;
+            }
+        }
+
+        for (int i = 0; i < tris.length(); i++) {
+            float t = hitTriangle(ro, rd, tris[i].v0, tris[i].v1, tris[i].v2);
+            if (t > 0.001 && t < tClosest) {
+                tClosest = t; hit = true;
+                rec.t = t;
+                rec.p = ro + rd * t;
+                vec3 outward = normalize(cross(tris[i].v1 - tris[i].v0, tris[i].v2 - tris[i].v0));
+                rec.frontFace = dot(rd, outward) < 0.0;
+                rec.n = rec.frontFace ? outward : -outward;
+                rec.albedo = tris[i].albedo;
+                rec.matType = tris[i].matType;
+                rec.fuzz = tris[i].fuzz;
+                rec.ior = tris[i].ior;
+            }
+        }
+        return hit;
+    }
+
+    vec3 skyColor(vec3 rd) {
+        float t = 0.5 * (normalize(rd).y + 1.0);
+        return mix(vec3(1.0), vec3(0.5, 0.7, 1.0), t);
+    }
+
+    // Schlick's approximation function
+    float schlick(float cosine, float ratio) {
+        float r0 = (1.0 - ratio) / (1.0 + ratio);
+        r0 *= r0;
+        return r0 + (1.0 - r0) * pow(1.0 - cosine, 5.0);
+    }
+
+    vec3 rayColor(vec3 ro, vec3 rd, inout uint rng) {
+        vec3 throughput = vec3(1.0);
+        vec3 radiance   = vec3(0.0);
+
+        for (int bounce = 0; bounce < MAX_BOUNCES; bounce++) {
+            Hit rec;
+            if (!sceneHit(ro, rd, rec)) {
+                radiance += throughput * skyColor(rd);
+                break;
+            }
+
+            if (rec.matType == 0) {
+                vec3 dir = rec.n + randUnit(rng);
+                if (dot(dir, dir) < 1e-8) dir = rec.n;
+                ro = rec.p; rd = normalize(dir);
+                throughput *= rec.albedo;
+            } else if (rec.matType == 1) {
+                vec3 refl = reflect(normalize(rd), rec.n);
+                refl = normalize(refl + rec.fuzz * randUnit(rng));
+                ro = rec.p; rd = refl;
+                throughput *= rec.albedo;
+                if (dot(rd, rec.n) <= 0.0) break;
+            } else {
+                float ratio = rec.frontFace ? (1.0 / rec.ior) : rec.ior;
+                vec3  unit = normalize(rd);
+                float cosT = min(dot(-unit, rec.n), 1.0);
+                float sinT = sqrt(1.0 - cosT * cosT);
+                bool tir = ratio * sinT > 1.0;
+                vec3 dir = (tir || schlick(cosT, ratio) > randf(rng)) ? reflect(unit, rec.n) : refract(unit, rec.n, ratio);
+                ro = rec.p;
+                rd = dir;
+            }
+        }
+        return radiance;
+    }
 
     void main() {
         ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
         if (pixel.x >= int(uResolution.x) || pixel.y >= int(uResolution.y)) return;
 
-        vec2 uv = (vec2(pixel) + 0.5) / uResolution * 2.0 - 1.0; // NDC [-1, 1]
+        uint rng = (uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + uFrame * 26699u) | 1u;
         float aspect = uResolution.x / uResolution.y;
+        vec3 col = vec3(0.0);
 
-        vec3 ro = uCamPos;
-        vec3 rd = normalize(uCamForward + uv.x * aspect * uTanHalfFov * uCamRight + uv.y * uTanHalfFov * uCamUp);
-
-        float tClosest = 1e30;
-        bool  hit = false;
-
-        for (int i = 0; i < spheres.length(); i++) {
-            vec3  oc = ro - spheres[i].center;
-            float a  = dot(rd, rd);
-            float b  = 2.0 * dot(oc, rd);
-            float c  = dot(oc, oc) - spheres[i].radius * spheres[i].radius;
-            float disc = b * b - 4.0 * a * c;
-            if (disc < 0.0) continue;
-
-            float t = (-b - sqrt(disc)) / (2.0 * a); // near root
-            if (t > 0.001 && t < tClosest) {
-                tClosest = t;
-                hit = true;
-            }
+        for (int s = 0; s < SPP; s++) {
+            vec2 jitter = vec2(randf(rng), randf(rng)) - 0.5;
+            vec2 uv = (vec2(pixel) + 0.5 + jitter) / uResolution * 2.0 - 1.0;
+            vec3 rd = normalize(uCamForward + uv.x * aspect * uTanHalfFov * uCamRight + uv.y * uTanHalfFov * uCamUp);
+            col += rayColor(uCamPos, rd, rng);
         }
+        col /= float(SPP);
 
-        vec3 color = hit ? vec3(1.0, 0.0, 0.0) : rd * 0.5 + 0.5;
-        imageStore(uOutput, pixel, vec4(color, 1.0));
+        vec3 prev = (uSampleCount == 0u) ? vec3(0.0) : imageLoad(uOutput, pixel).rgb;
+        vec3 avg = mix(prev, col, 1.0 / float(uSampleCount + 1u));
+        imageStore(uOutput, pixel, vec4(avg, 1.0));
     }
 "#;
 
@@ -77,5 +219,9 @@ pub const BLIT_FRAG_SRC: &str = r#"
     layout (binding = 0) uniform sampler2D uImage;
     void main() {
         FragColor = texture(uImage, vUV);
+
+        // GAMMA
+        // vec3 c = texture(uImage, vUV).rgb;
+        // FragColor = vec4(sqrt(max(c, vec3(0.0))), 1.0);
     }
 "#;
