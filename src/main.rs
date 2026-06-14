@@ -1,6 +1,4 @@
-// #![windows_subsystem = "console"]
-
-// IF YOU ARE READING THIS RUST MAKES ME WANT TO THROW MY COMPUTER OFF A CLIFF
+// IF YOU ARE READING THIS RUST MAKES ME GENUINELY WANT TO THROW MY COMPUTER OFF A CLIFF
 
 use gl::types::*;
 use glutin::{
@@ -24,7 +22,6 @@ use std::path::{Path, PathBuf};
 
 mod opengl;
 mod scene;
-
 use opengl::{ComputeShader, GeometryShader, Image2D, StorageBuffer, UniformBuffer};
 use opengl::shaders::{BLIT_FRAG_SRC, BLIT_VERT_SRC, RT_COMPUTE_SRC};
 use scene::{Camera, CameraData, Sphere, Triangle};
@@ -184,24 +181,7 @@ impl App {
         unsafe {            
             if let (Some(rt), Some(img), Some(cam), Some(ubo)) = (&self.rt_compute, &self.output_tex, &self.camera, &self.camera_ubo) {
                 
-                let cp = cam.pitch.cos();
-                let offset = glm::vec3(cam.distance * cp * cam.yaw.sin(), cam.distance * cam.pitch.sin(), cam.distance * cp * cam.yaw.cos());
-                let pos = cam.target + offset;
-                let fwd = glm::normalize(&(cam.target - pos));
-                let world_up = glm::vec3(0.0, 1.0, 0.0);
-                let right = glm::normalize(&glm::cross(&fwd, &world_up));
-                let up = glm::cross(&right, &fwd);
-
-                let camera_data = CameraData {
-                    pos,
-                    tan_half_fov: (cam.fov_y * 0.5).tan(),
-                    forward: fwd, _pad0: 0.0,
-                    right, _pad1: 0.0,
-                    up, _pad2: 0.0,
-                    resolution: glm::vec2(self.width as f32, self.height as f32),
-                    frame: self.frame,
-                    sample_count: self.sample_count,
-                };
+                let camera_data = cam.to_data(self.width, self.height, self.frame, self.sample_count);
                 ubo.update(&camera_data);
 
                 rt.bind();

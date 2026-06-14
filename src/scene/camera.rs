@@ -41,6 +41,36 @@ impl Camera {
         }
     }
 
+    pub fn position(&self) -> glm::Vec3 {
+        let cp = self.pitch.cos();
+        self.target + glm::vec3(
+            self.distance * cp * self.yaw.sin(),
+            self.distance * self.pitch.sin(),
+            self.distance * cp * self.yaw.cos(),
+        )
+    }
+
+    pub fn basis(&self) -> (glm::Vec3, glm::Vec3, glm::Vec3) {
+        let pos = self.position();
+        let fwd = glm::normalize(&(self.target - pos));
+        let right = glm::normalize(&glm::cross(&fwd, &glm::vec3(0.0, 1.0, 0.0)));
+        let up = glm::cross(&right, &fwd);
+        (fwd, right, up)
+    }
+
+    pub fn to_data(&self, width: u32, height: u32, frame: u32, sample_count: u32) -> CameraData {
+        let (forward, right, up) = self.basis();
+        CameraData {
+            pos: self.position(),
+            tan_half_fov: (self.fov_y * 0.5).tan(),
+            forward, _pad0: 0.0,
+            right, _pad1: 0.0,
+            up, _pad2: 0.0,
+            resolution: glm::vec2(width as f32, height as f32),
+            frame, sample_count,
+        }
+    }
+
     pub fn orbit(&mut self, dx: f32, dy: f32) {
         const SENS: f32 = 0.005;
         self.yaw -= dx * SENS;
