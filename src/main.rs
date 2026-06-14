@@ -1,5 +1,7 @@
 #![windows_subsystem = "console"]
 
+// IF YOU ARE READING THIS RUST MAKES ME WANT TO THROW MY COMPUTER OFF A CLIFF
+
 use gl::types::*;
 use glutin::{
     config::ConfigTemplateBuilder,
@@ -10,6 +12,7 @@ use glutin::{
 };
 use glutin_winit::DisplayBuilder;
 use std::num::NonZeroU32;
+use std::time::Instant;
 use winit::raw_window_handle::HasWindowHandle;
 use winit::{
     application::ApplicationHandler,
@@ -17,6 +20,12 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
+
+mod shaders;
+use shaders::{RTX_VERT_SRC, RTX_FRAG_SRC};
+
+mod geom_shader;
+use geom_shader::GeometryShader;
 
 struct GlContext {
     surface: glutin::surface::Surface<WindowSurface>,
@@ -43,6 +52,12 @@ struct App {
     height: u32,
     window: Option<Window>,
     gl: Option<GlContext>,
+    last_frame: Instant,
+    
+    vao: GLuint,
+    vbo: GLuint,
+
+    rtx_shader: Option<GeometryShader>,
 }
 
 impl App {
@@ -53,24 +68,64 @@ impl App {
             height,
             window: None,
             gl: None,
+            last_frame: Instant::now(),
+
+            vao: 0,
+            vbo: 0,
+            rtx_shader: None,
         }
     }
 
-    fn setup(&mut self) {
+    fn setup(&mut self, width: u32, height: u32) {
+ 
+        unsafe {
+            self.rtx_shader = Some(GeometryShader::new(RTX_VERT_SRC, RTX_FRAG_SRC));
+            
+            let vertices: [f32; 9] = [
+                -1.0,  3.0, 0.0,
+                -1.0, -1.0, 0.0,
+                3.0, -1.0, 0.0,
+            ];
+
+            gl::GenVertexArrays(1, &mut self.vao);
+            gl::GenBuffers(1, &mut self.vbo);
+
+            gl::BindVertexArray(self.vao);
+
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            gl::BufferData(gl::ARRAY_BUFFER, (vertices.len() * std::mem::size_of::<f32>()) as isize, vertices.as_ptr() as *const _, gl::STATIC_DRAW);
+
+            let stride = (3 * std::mem::size_of::<f32>()) as GLsizei;
+            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, 0 as *const _);
+            gl::EnableVertexAttribArray(0);
+
+            gl::BindVertexArray(0);
+        }
         println!("Setup\n");
     }
 
     fn shutdown(&mut self) {
+        unsafe {
+            gl::DeleteVertexArrays(1, &self.vao);
+            gl::DeleteBuffers(1, &self.vbo);
+        }
+        self.rtx_shader = None;
         println!("Shutdown\n");
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, _dt: f32) {
     }
 
     fn render(&mut self) {
         unsafe {
-            gl::ClearColor(0.1, 0.1, 0.15, 1.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+            gl::Clear(gl::COLOR_BUFFER_BIT);
+
+            if let Some(shader) = &self.rtx_shader {
+                shader.bind();
+                gl::BindVertexArray(self.vao);
+                gl::DrawArrays(gl::TRIANGLES, 0, 3);
+            }
         }
     }
 
@@ -130,8 +185,9 @@ impl ApplicationHandler for App {
 
         self.gl = Some(GlContext { surface, context });
         self.window = Some(window);
+        self.last_frame = Instant::now();
 
-        self.setup();
+        self.setup(self.width, self.height);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -146,7 +202,15 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.update();
+                let now = Instant::now();
+                let dt = now.duration_since(self.last_frame).as_secs_f32();
+                self.last_frame = now;
+                
+                let fps = (1.0 / dt) as u32;
+                let title = format!("{} | {:.4}ms | {}fps", self.title, dt * 1000.0, fps);
+                self.window.as_ref().unwrap().set_title(&title);
+
+                self.update(dt);
                 self.render();
 
                 if let Some(gl) = &self.gl {
@@ -163,6 +227,6 @@ impl ApplicationHandler for App {
 fn main() {
     println!("Hello, World!");
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new("Game", 1280, 720);
+    let mut app = App::new("Game", 800, 600);
     event_loop.run_app(&mut app).unwrap();
 }
