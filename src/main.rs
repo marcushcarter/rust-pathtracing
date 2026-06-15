@@ -1,5 +1,7 @@
 // IF YOU ARE READING THIS RUST MAKES ME GENUINELY WANT TO THROW MY COMPUTER OFF A CLIFF
 
+// #![windows_subsystem = "windows"]
+
 use gl::types::*;
 use glutin::{
     config::ConfigTemplateBuilder,
@@ -22,10 +24,12 @@ use std::path::{Path, PathBuf};
 mod opengl;
 mod scene;
 mod tasks;
+mod conversation;
 use opengl::{ComputeShader, GeometryShader, Image2D, StorageBuffer, UniformBuffer};
 use opengl::shaders::{BLIT_FRAG_SRC, BLIT_VERT_SRC, RT_COMPUTE_SRC};
 use scene::{Camera, CameraData, Scene};
 use tasks::{hello_world, fizz_buzz, InventoryItem, is_available, is_palindrome, c_to_f, c_to_k, f_to_c, k_to_c};
+use conversation::{reverse_string};
 
 const RESOURCE_ROOT: &str = "res";
 
@@ -175,7 +179,7 @@ impl App {
                 if let Some(env) = &self.env_tex { env.bind_sampled(1); }
                 let gx = (self.width + 7) / 8;
                 let gy = (self.height + 7) / 8;
-                if self.sample_count < 1000 { rt.dispatch(gx, gy, 1); }
+                if self.sample_count < 100000 { rt.dispatch(gx, gy, 1); }
                 gl::MemoryBarrier(gl::TEXTURE_FETCH_BARRIER_BIT | gl::SHADER_IMAGE_ACCESS_BARRIER_BIT);
             }
 
@@ -354,6 +358,9 @@ fn main() {
     println!("{} F = {} C", fahrenheit, f_to_c(fahrenheit));
     let kelvin = 298.15;
     println!("{} K = {} C", kelvin, k_to_c(kelvin));
+
+    // conversation
+    reverse_string("Marcus");
 
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new("Path Tracing Demo", 1024, 640);
